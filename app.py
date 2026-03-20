@@ -68,6 +68,46 @@ def get_db_connection():
         print(f"❌ Connection error: {e}")
         return None
 
+# Ensure table exists before any operation
+def ensure_table_exists():
+    try:
+        connection = mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password']
+        )
+        cursor = connection.cursor()
+        
+        # Create database if it doesn't exist
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {DB_CONFIG['database']}")
+        cursor.close()
+        connection.close()
+        
+        # Connect to the database and create table
+        connection = get_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS urls (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    short_code VARCHAR(10) UNIQUE NOT NULL,
+                    original_url TEXT NOT NULL,
+                    clicks INT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_short_code (short_code)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ''')
+            connection.commit()
+            cursor.close()
+            connection.close()
+            print("✅ Table verified/created successfully!")
+    except Error as e:
+        print(f"❌ Table creation error: {e}")
+
+# Call this on app startup
+ensure_table_exists()
+
 # Generate random short code
 def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
