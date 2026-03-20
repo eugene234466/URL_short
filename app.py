@@ -1,17 +1,26 @@
 from flask import Flask, request, redirect, jsonify, render_template_string
-import sqlite3
+import mysql.connector
 import string
 import random
+import os
 
 app = Flask(__name__)
-DB_NAME = 'urls.db'
+
+def get_db():
+    return mysql.connector.connect(
+        host=os.environ['MYSQLHOST'],
+        port=int(os.environ.get('MYSQLPORT', 3306)),
+        user=os.environ['MYSQLUSER'],
+        password=os.environ['MYSQLPASSWORD'],
+        database=os.environ['MYSQLDATABASE'],
+    )
 
 # Initialize database
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS urls
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 (id INTEGER AUTO_INCREMENT PRIMARY KEY,
                   short_code TEXT UNIQUE NOT NULL,
                   original_url TEXT NOT NULL,
                   clicks INTEGER DEFAULT 0,
@@ -24,9 +33,9 @@ def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
     while True:
         code = ''.join(random.choices(chars, k=length))
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_db()
         c = conn.cursor()
-        c.execute('SELECT short_code FROM urls WHERE short_code = ?', (code,))
+        c.execute('SELECT short_code FROM urls WHERE short_code = %s', (code,))
         if not c.fetchone():
             conn.close()
             return code
@@ -96,16 +105,16 @@ def shorten_url():
         original_url = 'https://' + original_url
     
     # Check if URL already exists
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
-    c.execute('SELECT short_code FROM urls WHERE original_url = ?', (original_url,))
+    c.execute('SELECT short_code FROM urls WHERE original_url = %s', (original_url,))
     existing = c.fetchone()
     
     if existing:
         short_code = existing[0]
     else:
         short_code = generate_short_code()
-        c.execute('INSERT INTO urls (short_code, original_url) VALUES (?, ?)',
+        c.execute('INSERT INTO urls (short_code, original_url) VALUES (%s, %s)',
                   (short_code, original_url))
         conn.commit()
     
@@ -116,14 +125,14 @@ def shorten_url():
 
 @app.route('/<short_code>')
 def redirect_url(short_code):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
-    c.execute('SELECT original_url FROM urls WHERE short_code = ?', (short_code,))
+    c.execute('SELECT original_url FROM urls WHERE short_code = %s', (short_code,))
     result = c.fetchone()
     
     if result:
         # Increment click counter
-        c.execute('UPDATE urls SET clicks = clicks + 1 WHERE short_code = ?', (short_code,))
+        c.execute('UPDATE urls SET clicks = clicks + 1 WHERE short_code = %s', (short_code,))
         conn.commit()
         conn.close()
         return redirect(result[0])
@@ -133,9 +142,9 @@ def redirect_url(short_code):
 
 @app.route('/stats/<short_code>')
 def stats(short_code):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     c = conn.cursor()
-    c.execute('SELECT original_url, clicks, created_at FROM urls WHERE short_code = ?', (short_code,))
+    c.execute('SELECT original_url, clicks, created_at FROM urls WHERE short_code = %s', (short_code,))
     result = c.fetchone()
     conn.close()
     
