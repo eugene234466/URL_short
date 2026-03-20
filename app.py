@@ -19,6 +19,8 @@ def init_db():
     conn.commit()
     conn.close()
 
+init_db()
+
 # Generate random short code
 def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
@@ -149,5 +151,4 @@ def stats(short_code):
     return jsonify({'error': 'URL not found'}), 404
 
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True, port=5000)
