@@ -28,6 +28,8 @@ def init_db():
     conn.commit()
     conn.close()
 
+init_db()
+
 # Generate random short code
 def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
