@@ -21,7 +21,7 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS urls
                  (id INTEGER AUTO_INCREMENT PRIMARY KEY,
-                  short_code TEXT UNIQUE NOT NULL,
+                  short_code VARCHAR(255) UNIQUE NOT NULL,
                   original_url TEXT NOT NULL,
                   clicks INTEGER DEFAULT 0,
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
