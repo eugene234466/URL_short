@@ -1,347 +1,245 @@
-from flask import Flask, request, redirect, jsonify, render_template_string
-import mysql.connector
-from mysql.connector import Error
+from flask import Flask, request, redirect, jsonify, render_template_string, send_from_directory
+import sqlite3
 import string
 import random
 import os
 
 app = Flask(__name__)
+DB_NAME = 'urls.db'
 
-# MySQL Configuration - Railway uses MYSQLHOST, MYSQLUSER, etc.
-# Check for Railway-style env vars first, then fall back to generic ones
-DB_CONFIG = {
-    'host': os.getenv('MYSQLHOST') or os.getenv('DB_HOST', 'localhost'),
-    'port': int(os.getenv('MYSQLPORT') or os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('MYSQLUSER') or os.getenv('DB_USER', 'root'),
-    'password': os.getenv('MYSQLPASSWORD') or os.getenv('DB_PASSWORD', ''),
-    'database': os.getenv('MYSQLDATABASE') or os.getenv('DB_NAME', 'url_shortener')
-}
-
-print(f"🔍 Connecting to MySQL at {DB_CONFIG['host']}:{DB_CONFIG['port']}")
-
-# Initialize database and create table
+# Initialize database
 def init_db():
-    try:
-        # Connect without database to create it
-        connection = mysql.connector.connect(
-            host=DB_CONFIG['host'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password']
-        )
-        cursor = connection.cursor()
-        
-        # Create database if it doesn't exist
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {DB_CONFIG['database']}")
-        cursor.close()
-        connection.close()
-        
-        # Connect to the database
-        connection = get_db_connection()
-        cursor = connection.cursor()
-        
-        # Create table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS urls (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                short_code VARCHAR(10) UNIQUE NOT NULL,
-                original_url TEXT NOT NULL,
-                clicks INT DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_short_code (short_code)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        ''')
-        
-        connection.commit()
-        cursor.close()
-        connection.close()
-        print("✅ Database initialized successfully!")
-        
-    except Error as e:
-        print(f"❌ Database error: {e}")
-
-# Get database connection
-def get_db_connection():
-    try:
-        connection = mysql.connector.connect(**DB_CONFIG)
-        return connection
-    except Error as e:
-        print(f"❌ Connection error: {e}")
-        return None
-
-# Ensure table exists before any operation
-def ensure_table_exists():
-    try:
-        connection = mysql.connector.connect(
-            host=DB_CONFIG['host'],
-            port=DB_CONFIG['port'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password']
-        )
-        cursor = connection.cursor()
-        
-        # Create database if it doesn't exist
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {DB_CONFIG['database']}")
-        cursor.close()
-        connection.close()
-        
-        # Connect to the database and create table
-        connection = get_db_connection()
-        if connection:
-            cursor = connection.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS urls (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    short_code VARCHAR(10) UNIQUE NOT NULL,
-                    original_url TEXT NOT NULL,
-                    clicks INT DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_short_code (short_code)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            ''')
-            connection.commit()
-            cursor.close()
-            connection.close()
-            print("✅ Table verified/created successfully!")
-    except Error as e:
-        print(f"❌ Table creation error: {e}")
-
-# Call this on app startup
-ensure_table_exists()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS urls
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  short_code TEXT UNIQUE NOT NULL,
+                  original_url TEXT NOT NULL,
+                  clicks INTEGER DEFAULT 0,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    conn.commit()
+    conn.close()
 
 # Generate random short code
 def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
     while True:
         code = ''.join(random.choices(chars, k=length))
-        connection = get_db_connection()
-        if not connection:
-            return None
-            
-        cursor = connection.cursor()
-        cursor.execute('SELECT short_code FROM urls WHERE short_code = %s', (code,))
-        if not cursor.fetchone():
-            cursor.close()
-            connection.close()
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute('SELECT short_code FROM urls WHERE short_code = ?', (code,))
+        if not c.fetchone():
+            conn.close()
             return code
-        cursor.close()
-        connection.close()
+        conn.close()
 
-# Modern HTML template (same as before)
+# PWA-Enhanced HTML template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#667eea">
+    <meta name="theme-color" content="#007bff">
     <meta name="description" content="Simple and fast URL shortener">
-    <title>🔗 URL Shortener</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>URL Shortener</title>
     <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/static/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
+            padding: 20px;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
         }
-        
-        #container {
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
             max-width: 500px;
             width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
-        
-        .card {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 24px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            animation: slideUp 0.6s ease;
+        h1 { 
+            color: #333; 
+            margin-bottom: 10px;
+            font-size: 28px;
         }
-        
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        h1 {
-            font-size: 32px;
-            font-weight: 700;
-            color: #1a1a2e;
-            margin-bottom: 8px;
-            text-align: center;
-        }
-        
         .subtitle {
-            text-align: center;
-            color: #6b7280;
+            color: #666;
+            margin-bottom: 30px;
             font-size: 14px;
-            margin-bottom: 32px;
         }
-        
         input[type="text"] { 
             width: 100%; 
-            padding: 16px 20px;
+            padding: 15px; 
             margin: 10px 0;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
             font-size: 16px;
-            transition: all 0.3s ease;
-            background: #f9fafb;
+            transition: all 0.3s;
         }
-        
         input[type="text"]:focus {
             outline: none;
             border-color: #667eea;
-            background: white;
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
         }
-        
-        input[type="text"]::placeholder {
-            color: #9ca3af;
-        }
-        
         button { 
             width: 100%;
-            padding: 16px 24px;
+            padding: 15px; 
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            color: white; 
             border: none;
-            border-radius: 12px;
+            border-radius: 10px;
             cursor: pointer;
             font-size: 16px;
             font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-            margin-top: 8px;
+            transition: transform 0.2s;
         }
-        
         button:hover { 
             transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.5);
         }
-        
         button:active {
             transform: translateY(0);
         }
-        
         .result { 
-            margin-top: 24px;
-            padding: 20px;
-            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
-            border-radius: 16px;
-            border-left: 4px solid #28a745;
-            animation: fadeIn 0.5s ease;
+            margin-top: 20px; 
+            padding: 20px; 
+            background: #e8f5e9;
+            border-radius: 10px;
+            border-left: 4px solid #4caf50;
         }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
+        .error { 
+            background: #ffebee;
+            border-left-color: #f44336;
         }
-        
         .result strong {
             display: block;
-            color: #155724;
-            font-size: 14px;
-            margin-bottom: 12px;
-            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
         }
-        
-        .result a {
-            display: inline-block;
+        .short-url {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        .short-url a {
             color: #667eea;
             text-decoration: none;
-            font-weight: 500;
-            padding: 12px 16px;
-            background: white;
-            border-radius: 8px;
-            margin-top: 8px;
-            transition: all 0.2s ease;
         }
-        
-        .result a:hover {
-            background: #f3f4f6;
-            transform: translateX(4px);
+        .copy-btn {
+            margin-top: 10px;
+            width: auto;
+            padding: 8px 20px;
+            background: #4caf50;
+            font-size: 14px;
         }
-        
-        .error { 
-            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
-            border-left: 4px solid #dc3545;
+        .install-prompt {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
         }
-        
-        .error strong {
-            color: #721c24;
+        .install-prompt button {
+            margin-top: 10px;
+            background: #ffc107;
+            color: #000;
         }
-        
-        .icon {
-            font-size: 48px;
-            text-align: center;
-            margin-bottom: 16px;
-        }
-        
-        .footer {
-            text-align: center;
-            margin-top: 24px;
+        .offline-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #f44336;
             color: white;
-            font-size: 13px;
-            opacity: 0.9;
+            padding: 10px 20px;
+            border-radius: 20px;
+            display: none;
+            font-size: 14px;
         }
-        
-        .db-badge {
-            display: inline-block;
-            background: rgba(255, 255, 255, 0.2);
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 11px;
-            margin-left: 8px;
-        }
-        
-        @media (max-width: 600px) {
-            .card {
-                padding: 28px 24px;
-            }
-            
-            h1 {
-                font-size: 28px;
-            }
+        .online {
+            background: #4caf50;
         }
     </style>
 </head>
 <body>
-    <div id="container">
-        <div class="card">
-            <div class="icon">🔗</div>
-            <h1>URL Shortener <span class="db-badge">MySQL</span></h1>
-            <p class="subtitle">Fast, simple, works offline</p>
-            
-            <form id="urlForm">
-                <input type="text" id="urlInput" placeholder="Enter your long URL here..." required>
-                <button type="submit">✨ Shorten URL</button>
-            </form>
-            <div id="result"></div>
+    <div class="offline-indicator" id="offlineIndicator">Offline</div>
+    
+    <div class="container">
+        <div class="install-prompt" id="installPrompt">
+            <strong>📱 Install this app!</strong>
+            <p style="margin-top: 8px; font-size: 14px;">Add to your home screen for quick access</p>
+            <button id="installBtn">Install Now</button>
         </div>
         
-        <div class="footer">
-            Built with 💜 • MySQL Database • Production Ready
-        </div>
+        <h1>🔗 URL Shortener</h1>
+        <p class="subtitle">Fast, simple, works offline</p>
+        
+        <form id="urlForm">
+            <input type="text" id="urlInput" placeholder="Enter long URL" required>
+            <button type="submit">Shorten URL</button>
+        </form>
+        <div id="result"></div>
     </div>
     
     <script>
+        // Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js')
+                .then(reg => console.log('Service Worker registered'))
+                .catch(err => console.log('Service Worker error:', err));
+        }
+        
+        // Install prompt
+        let deferredPrompt;
+        const installPrompt = document.getElementById('installPrompt');
+        const installBtn = document.getElementById('installBtn');
+        
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installPrompt.style.display = 'block';
+        });
+        
+        installBtn.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    installPrompt.style.display = 'none';
+                }
+                deferredPrompt = null;
+            }
+        });
+        
+        // Online/Offline indicator
+        const offlineIndicator = document.getElementById('offlineIndicator');
+        
+        window.addEventListener('online', () => {
+            offlineIndicator.textContent = 'Back Online';
+            offlineIndicator.classList.add('online');
+            offlineIndicator.style.display = 'block';
+            setTimeout(() => offlineIndicator.style.display = 'none', 3000);
+        });
+        
+        window.addEventListener('offline', () => {
+            offlineIndicator.textContent = 'Offline Mode';
+            offlineIndicator.classList.remove('online');
+            offlineIndicator.style.display = 'block';
+        });
+        
+        // Form submission
         document.getElementById('urlForm').onsubmit = async (e) => {
             e.preventDefault();
             const url = document.getElementById('urlInput').value;
@@ -352,15 +250,48 @@ HTML_TEMPLATE = '''
             });
             const data = await response.json();
             const resultDiv = document.getElementById('result');
+            
             if (data.short_url) {
                 resultDiv.className = 'result';
-                resultDiv.innerHTML = `<strong>✅ Your shortened URL:</strong><br>
-                    <a href="${data.short_url}" target="_blank">${data.short_url}</a>`;
+                resultDiv.innerHTML = `
+                    <strong>✅ Shortened URL:</strong>
+                    <div class="short-url">
+                        <a href="${data.short_url}" target="_blank">${data.short_url}</a>
+                    </div>
+                    <button class="copy-btn" onclick="copyToClipboard('${data.short_url}')">
+                        📋 Copy Link
+                    </button>
+                `;
             } else {
                 resultDiv.className = 'result error';
                 resultDiv.innerHTML = `<strong>❌ Error:</strong> ${data.error}`;
             }
         };
+        
+        // Copy to clipboard
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => btn.textContent = originalText, 2000);
+            });
+        }
+        
+        // Share API (if available)
+        async function shareUrl(url) {
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: 'Shortened URL',
+                        text: 'Check out this link:',
+                        url: url
+                    });
+                } catch (err) {
+                    console.log('Share failed:', err);
+                }
+            }
+        }
     </script>
 </body>
 </html>
@@ -375,134 +306,118 @@ def manifest():
     return jsonify({
         "name": "URL Shortener",
         "short_name": "ShortURL",
-        "description": "Fast and simple URL shortener with MySQL",
+        "description": "Fast and simple URL shortener",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#ffffff",
-        "theme_color": "#667eea",
+        "theme_color": "#007bff",
         "orientation": "portrait",
         "icons": [
             {
                 "src": "/static/icon-192.png",
                 "sizes": "192x192",
-                "type": "image/png"
+                "type": "image/png",
+                "purpose": "any maskable"
             },
             {
                 "src": "/static/icon-512.png",
                 "sizes": "512x512",
-                "type": "image/png"
+                "type": "image/png",
+                "purpose": "any maskable"
             }
         ]
     })
 
+@app.route('/sw.js')
+def service_worker():
+    sw_code = '''
+const CACHE_NAME = 'url-shortener-v1';
+const urlsToCache = [
+  '/',
+  '/manifest.json',
+  '/static/icon-192.png',
+  '/static/icon-512.png'
+];
+
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(urlsToCache))
+  );
+});
+
+self.addEventListener('fetch', event => {
+  event.respondWith(
+    caches.match(event.request)
+      .then(response => response || fetch(event.request))
+      .catch(() => caches.match('/'))
+  );
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys().then(cacheNames => {
+      return Promise.all(
+        cacheNames.filter(name => name !== CACHE_NAME)
+          .map(name => caches.delete(name))
+      );
+    })
+  );
+});
+'''
+    return sw_code, 200, {'Content-Type': 'application/javascript'}
+
 @app.route('/shorten', methods=['POST'])
 def shorten_url():
-    try:
-        data = request.get_json()
-        original_url = data.get('url', '').strip()
-        
-        if not original_url:
-            return jsonify({'error': 'URL is required'}), 400
-        
-        if not original_url.startswith(('http://', 'https://')):
-            original_url = 'https://' + original_url
-        
-        connection = get_db_connection()
-        if not connection:
-            return jsonify({'error': 'Database connection failed'}), 500
-        
-        cursor = connection.cursor(dictionary=True)
-        
-        # Check if URL already exists
-        cursor.execute('SELECT short_code FROM urls WHERE original_url = %s', (original_url,))
-        existing = cursor.fetchone()
-        
-        if existing:
-            short_code = existing['short_code']
-        else:
-            short_code = generate_short_code()
-            if not short_code:
-                cursor.close()
-                connection.close()
-                return jsonify({'error': 'Failed to generate short code'}), 500
-            
-            cursor.execute(
-                'INSERT INTO urls (short_code, original_url) VALUES (%s, %s)',
-                (short_code, original_url)
-            )
-            connection.commit()
-        
-        cursor.close()
-        connection.close()
-        
-        short_url = request.host_url + short_code
-        return jsonify({'short_url': short_url, 'short_code': short_code})
-        
-    except Error as e:
-        print(f"Database error: {e}")
-        return jsonify({'error': 'Database error occurred'}), 500
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({'error': 'An error occurred'}), 500
+    data = request.get_json()
+    original_url = data.get('url', '').strip()
+    
+    if not original_url:
+        return jsonify({'error': 'URL is required'}), 400
+    
+    if not original_url.startswith(('http://', 'https://')):
+        original_url = 'https://' + original_url
+    
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT short_code FROM urls WHERE original_url = ?', (original_url,))
+    existing = c.fetchone()
+    
+    if existing:
+        short_code = existing[0]
+    else:
+        short_code = generate_short_code()
+        c.execute('INSERT INTO urls (short_code, original_url) VALUES (?, ?)',
+                  (short_code, original_url))
+        conn.commit()
+    
+    conn.close()
+    
+    short_url = request.host_url + short_code
+    return jsonify({'short_url': short_url, 'short_code': short_code})
 
 @app.route('/<short_code>')
 def redirect_url(short_code):
-    try:
-        connection = get_db_connection()
-        if not connection:
-            return jsonify({'error': 'Database connection failed'}), 500
-        
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute('SELECT original_url FROM urls WHERE short_code = %s', (short_code,))
-        result = cursor.fetchone()
-        
-        if result:
-            # Increment click counter
-            cursor.execute('UPDATE urls SET clicks = clicks + 1 WHERE short_code = %s', (short_code,))
-            connection.commit()
-            cursor.close()
-            connection.close()
-            return redirect(result['original_url'])
-        
-        cursor.close()
-        connection.close()
-        return jsonify({'error': 'URL not found'}), 404
-        
-    except Error as e:
-        print(f"Database error: {e}")
-        return jsonify({'error': 'Database error occurred'}), 500
-
-@app.route('/stats/<short_code>')
-def stats(short_code):
-    try:
-        connection = get_db_connection()
-        if not connection:
-            return jsonify({'error': 'Database connection failed'}), 500
-        
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute(
-            'SELECT original_url, clicks, created_at FROM urls WHERE short_code = %s',
-            (short_code,)
-        )
-        result = cursor.fetchone()
-        cursor.close()
-        connection.close()
-        
-        if result:
-            return jsonify({
-                'short_code': short_code,
-                'original_url': result['original_url'],
-                'clicks': result['clicks'],
-                'created_at': str(result['created_at'])
-            })
-        return jsonify({'error': 'URL not found'}), 404
-        
-    except Error as e:
-        print(f"Database error: {e}")
-        return jsonify({'error': 'Database error occurred'}), 500
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT original_url FROM urls WHERE short_code = ?', (short_code,))
+    result = c.fetchone()
+    
+    if result:
+        c.execute('UPDATE urls SET clicks = clicks + 1 WHERE short_code = ?', (short_code,))
+        conn.commit()
+        conn.close()
+        return redirect(result[0])
+    
+    conn.close()
+    return jsonify({'error': 'URL not found'}), 404
 
 if __name__ == '__main__':
-    print("🚀 Initializing URL Shortener with MySQL...")
+    # Create static folder for icons
+    os.makedirs('static', exist_ok=True)
     init_db()
-    print("✅ Server starting on http://localhost:5000")
+    
+    print("\n🚀 PWA URL Shortener starting...")
+    print("📱 Visit http://localhost:5000 and install it as an app!\n")
+    
     app.run(debug=True, port=5000)
