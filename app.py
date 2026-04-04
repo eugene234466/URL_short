@@ -29,7 +29,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 🔥 IMPORTANT: Run on startup (works on Render)
+# 🔥 IMPORTANT: Runs on Render too
 init_db()
 
 
@@ -39,7 +39,6 @@ def generate_short_code(length=6):
     chars = string.ascii_letters + string.digits
     while True:
         code = ''.join(random.choices(chars, k=length))
-
         conn = get_db()
         c = conn.cursor()
         c.execute('SELECT short_code FROM urls WHERE short_code = ?', (code,))
@@ -50,21 +49,94 @@ def generate_short_code(length=6):
             return code
 
 
-# ---------- FRONTEND ----------
+# ---------- UI (YOUR MODERN DESIGN) ----------
 
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head>
-<title>URL Shortener</title>
+HTML_TEMPLATE = '''  
+<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+<meta charset="UTF-8">  
+<meta name="viewport" content="width=device-width, initial-scale=1.0">  
+<title>🔗 URL Shortener</title>  
+
+<style>  
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {   
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+}
+
+.card {
+    background: rgba(255,255,255,0.95);
+    border-radius:24px;
+    padding:40px;
+    max-width:500px;
+    width:100%;
+    box-shadow:0 20px 60px rgba(0,0,0,0.3);
+}
+
+h1 {
+    font-size:30px;
+    text-align:center;
+    margin-bottom:10px;
+}
+
+.subtitle {
+    text-align:center;
+    color:#666;
+    margin-bottom:30px;
+}
+
+input {
+    width:100%;
+    padding:16px;
+    border-radius:12px;
+    border:2px solid #ddd;
+    margin:10px 0;
+}
+
+button {
+    width:100%;
+    padding:16px;
+    border:none;
+    border-radius:12px;
+    background: linear-gradient(135deg,#667eea,#764ba2);
+    color:white;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+.result {
+    margin-top:20px;
+    padding:20px;
+    border-radius:12px;
+    background:#e8f5e9;
+}
+
+.error {
+    background:#ffebee;
+}
+</style>
 </head>
-<body style="font-family:sans-serif; text-align:center; padding:50px;">
+
+<body>
+<div class="card">
 <h1>🔗 URL Shortener</h1>
+<p class="subtitle">Fast, simple, clean</p>
+
 <form id="form">
-<input type="text" id="url" placeholder="Enter URL" style="width:300px; padding:10px;" required>
-<br><br>
+<input type="text" id="url" placeholder="Enter URL" required>
 <button type="submit">Shorten</button>
 </form>
+
 <div id="result"></div>
+</div>
 
 <script>
 document.getElementById("form").onsubmit = async (e) => {
@@ -73,24 +145,30 @@ document.getElementById("form").onsubmit = async (e) => {
     const url = document.getElementById("url").value;
 
     const res = await fetch("/shorten", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
         body: JSON.stringify({url})
     });
 
     const data = await res.json();
 
+    const result = document.getElementById("result");
+
     if (data.short_url) {
-        document.getElementById("result").innerHTML =
-            "<p><b>Short URL:</b> <a href='" + data.short_url + "'>" + data.short_url + "</a></p>";
+        result.className = "result";
+        result.innerHTML = `
+            <strong>✅ Short URL:</strong><br>
+            <a href="${data.short_url}" target="_blank">${data.short_url}</a>
+        `;
     } else {
-        document.getElementById("result").innerText = data.error;
+        result.className = "result error";
+        result.innerHTML = "❌ " + data.error;
     }
 };
 </script>
 </body>
 </html>
-"""
+'''
 
 
 # ---------- ROUTES ----------
@@ -106,15 +184,14 @@ def shorten_url():
     original_url = data.get('url', '').strip()
 
     if not original_url:
-        return jsonify({'error': 'URL is required'}), 400
+        return jsonify({'error': 'URL required'}), 400
 
-    if not original_url.startswith(('http://', 'https://')):
+    if not original_url.startswith(('http://','https://')):
         original_url = 'https://' + original_url
 
     conn = get_db()
     c = conn.cursor()
 
-    # Check existing
     c.execute('SELECT short_code FROM urls WHERE original_url = ?', (original_url,))
     existing = c.fetchone()
 
@@ -122,16 +199,13 @@ def shorten_url():
         short_code = existing['short_code']
     else:
         short_code = generate_short_code()
-        c.execute(
-            'INSERT INTO urls (short_code, original_url) VALUES (?, ?)',
-            (short_code, original_url)
-        )
+        c.execute('INSERT INTO urls (short_code, original_url) VALUES (?, ?)',
+                  (short_code, original_url))
         conn.commit()
 
     conn.close()
 
-    short_url = request.host_url + short_code
-    return jsonify({'short_url': short_url})
+    return jsonify({'short_url': request.host_url + short_code})
 
 
 @app.route('/<short_code>')
@@ -143,21 +217,17 @@ def redirect_url(short_code):
     result = c.fetchone()
 
     if result:
-        c.execute(
-            'UPDATE urls SET clicks = clicks + 1 WHERE short_code = ?',
-            (short_code,)
-        )
+        c.execute('UPDATE urls SET clicks = clicks + 1 WHERE short_code = ?', (short_code,))
         conn.commit()
         conn.close()
         return redirect(result['original_url'])
 
     conn.close()
-    return jsonify({'error': 'URL not found'}), 404
+    return jsonify({'error': 'Not found'}), 404
 
 
-# ---------- LOCAL RUN ----------
+# ---------- RUN ----------
 
 if __name__ == '__main__':
-    os.makedirs('static', exist_ok=True)
     print("🚀 Running locally...")
     app.run(debug=True)
